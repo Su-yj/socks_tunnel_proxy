@@ -271,7 +271,7 @@ class Server(BaseServer):
         :param client: 代理客户端的套接字
         :return:
         """
-        head = self.recv(client, 3)
+        head = client.recv(3)
         if not head:
             return self.close_sock(client)
         version, cmd, _ = struct.unpack('!BBB', head)

@@ -199,6 +199,7 @@ class Agent(BaseServer):
         else:
             raise exceptions.UnknownTypeException()
         logger.debug(f'create remote connect: {dst_addr}:{dst_port}')
+        # TODO：这里这样连接可能会造成阻塞
         remote.connect((dst_addr, dst_port))
         remote.setblocking(False)
         return remote
