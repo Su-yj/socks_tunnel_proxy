@@ -12,3 +12,7 @@ class UnknownCMDException(Exception):
 
 class AuthenticationFailedException(Exception):
     """服务端认证失败"""
+
+
+class PingPongTimeOutException(Exception):
+    """ping/pong 超时"""
