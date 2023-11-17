@@ -1,4 +1,9 @@
 import asyncio
+try:
+    import uvloop
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+except ModuleNotFoundError:
+    pass
 import struct
 import time
 from asyncio import StreamReader, StreamWriter, IncompleteReadError

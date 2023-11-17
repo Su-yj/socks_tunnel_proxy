@@ -1,1 +1,2 @@
 loguru
+uvloop; sys_platform=='linux'
