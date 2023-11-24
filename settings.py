@@ -4,7 +4,8 @@ BUFFER_SIZE = 1024
 # log level (DEBUG | INFO | WARNING | ERROR | CRITICAL)
 LOG_LEVEL = 'DEBUG'
 # backends
-CONNECTION_BACKEND = 'plugins.async_connection.SocketConnection'
+# CONNECTION_BACKEND = 'plugins.async_connection.SocketConnection'
+CONNECTION_BACKEND = 'plugins.async_ws_connection.WebSocketConnection'
 # CONNECTION_BACKEND = 'plugins.connection.SocketConnection'
 AUTHENTICATION_BACKEND = 'plugins.async_authentication.AnonymousAuthentication'
 # AUTHENTICATION_BACKEND = 'plugins.authentication.AnonymousAuthentication'
@@ -28,6 +29,7 @@ TUNNEL_BIND_PORT = 8889
 # #################### Agent Config ####################
 # the tunnel server host and port
 TUNNEL_SERVER_HOST = 'localhost'
+# TUNNEL_SERVER_HOST = '192.168.179.132'
 TUNNEL_SERVER_PORT = 8889
 
 # retry connect tunnel server interval (unit：second)
