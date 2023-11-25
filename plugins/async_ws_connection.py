@@ -56,8 +56,9 @@ class WebSocketConnection(SocketConnection):
     async def server_start(self, server, host: str, port: int, client_connected_cb: Callable, *args, **kwargs):
         async def ws_client_connected_cb(reader: StreamReader, writer: StreamWriter):
             try:
-                data = await reader.read(1024)
+                data = await reader.read(4096)
                 data = data.decode()
+                # logger.info(data)
                 if not data.endswith('\r\n'):
                     raise EOFError('line without CRLF')
                 if not re.search(r'^GET .* HTTP/1\.1\r\n', data, re.I):
@@ -110,7 +111,7 @@ class WebSocketConnection(SocketConnection):
     async def agent_start(self, server, host: str, port: int, *args, **kwargs) -> tuple[StreamReader, StreamWriter]:
         reader, writer = await super(WebSocketConnection, self).agent_start(server, host, port, *args, **kwargs)
         ws_key = self._create_sec_websocket_key()
-        raw_data = f'GET ws://{host}:{port}/ HTTP/1.1\r\n' \
+        raw_data = f'GET / HTTP/1.1\r\n' \
                    f'Host: {host}:{port}\r\n' \
                    f'Connection: Upgrade\r\n' \
                    f'Upgrade: websocket\r\n' \
@@ -150,7 +151,7 @@ class WebSocketConnection(SocketConnection):
 
     async def agent_send(self, server, reader: StreamReader, writer: StreamWriter, data: Union[bytes, bytearray],
                          *args, **kwargs):
-        payload = self.create_frame(data)
+        payload = self.create_frame(payload=data, mask=True)
         writer.write(payload)
         await writer.drain()
 
