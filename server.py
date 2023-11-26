@@ -24,11 +24,9 @@ class Server(BaseServer):
         # tunnel server socket
         self.tunnel_socket = None
         # socket map of proxy client
-        self.client_map: dict[int, socket.socket] = {}
+        self.client_map: dict[bytes, socket.socket] = {}
         # socket map of agent client
         self.agent_map: dict[int, socket.socket] = {}
-        # socket map of proxy client and agent client
-        self.client_agent_map: dict[socket.socket, socket.socket] = {}
 
     @logger.catch
     def run(self):
@@ -38,8 +36,8 @@ class Server(BaseServer):
             try:
                 events = self.selector.select()
                 for key, _ in events:
-                    callback = key.data
-                    callback(key.fileobj)
+                    callback = key.data[0]
+                    callback(key.fileobj, *key.data[1:])
             except KeyboardInterrupt:
                 self.close()
                 logger.info('Bye Bye!')
@@ -71,7 +69,8 @@ class Server(BaseServer):
         :param sock: 代理客户端的套接字
         :return:
         """
-        self.client_map[id(sock)] = sock
+        key = self.int2bytes(id(sock))
+        self.client_map[key] = sock
 
     def save_agent(self, sock: socket.socket) -> None:
         """
@@ -81,28 +80,18 @@ class Server(BaseServer):
         """
         self.agent_map[id(sock)] = sock
 
-    def save_client_agent_map(self, client: socket.socket, agent: socket.socket) -> None:
-        """
-        保存代理客户端和 agent 客户端的映射
-        :param client: 代理客户端的套接字
-        :param agent: agent 客户端的套接字
-        :return:
-        """
-        self.client_agent_map[client] = agent
-
     def get_client(self, value: bytes) -> Optional[socket.socket]:
         """
         根据内存地址获取代理客户端的套接字对象
         :param value: 内存地址的 16 进制值
         :return: 代理客户端的套接字
         """
-        memory_addr = utils.bytes2int(value)
-        client = self.client_map.get(memory_addr)
+        client = self.client_map.get(value)
         if not client:
             return
         if client.fileno() == -1:
             logger.info(f'client was closed: {client}')
-            self.client_map.pop(memory_addr, None)
+            self.client_map.pop(value, None)
             return
         return client
 
@@ -122,30 +111,13 @@ class Server(BaseServer):
             return
         return agent
 
-    def get_client_agent_map(self, client: socket.socket) -> Optional[socket.socket]:
-        """
-        通过传入的代理客户端套接字获取对应的 agent 套接字
-        :param client: 代理客户端套接字
-        :return: agent 客户端套接字
-        """
-        agent = self.client_agent_map.get(client)
-        if not agent:
-            return
-        if agent.fileno() == -1:
-            logger.info(f'agent was closed: {agent}')
-            self.client_agent_map.pop(client, None)
-            return
-        return agent
-
-    def close_bnd_socket(self, client: socket.socket):
+    def close_bnd_socket(self, agent: socket.socket, client: socket.socket):
         """
         关闭代理客户端对应 agent 服务中的 remote 套接字
+        :param agent: agent 客户端
         :param client: 代理客户端的套接字
         :return: 
         """
-        agent = self.get_client_agent_map(client)
-        if not agent:
-            return
         data = struct.pack('!B', 0x03)
         data += self.sock2send_data(client)
         self.send(agent, data)
@@ -156,8 +128,8 @@ class Server(BaseServer):
         :param sock: 代理客户端的套接字
         :return: 
         """
-        self.client_map.pop(id(sock), None)
-        self.client_agent_map.pop(sock, None)
+        key = self.int2bytes(id(sock))
+        self.client_map.pop(key, None)
         return self.close_sock(sock)
 
     def close_agent(self, sock: socket.socket):
@@ -171,7 +143,6 @@ class Server(BaseServer):
 
     def close_sock(self, sock: socket.socket):
         """断开代理客户端的连接"""
-        logger.debug(f'close connect: {sock}')
         try:
             self.selector.unregister(sock)
         except KeyError:
@@ -183,7 +154,7 @@ class Server(BaseServer):
         """开启 socks5 代理服务"""
         self.socks5_socket = self.start_server(settings.SOCKS5_BIND_HOST, settings.SOCKS5_BIND_PORT)
         logger.info(f'start socks5 server: {settings.SOCKS5_BIND_HOST}:{settings.SOCKS5_BIND_PORT}')
-        self.selector.register(self.socks5_socket, selectors.EVENT_READ, self.accept_proxy_client)
+        self.selector.register(self.socks5_socket, selectors.EVENT_READ, (self.accept_proxy_client,))
 
     def accept_proxy_client(self, socks5_socket: socket.socket):
         """
@@ -194,7 +165,7 @@ class Server(BaseServer):
         conn, addr = socks5_socket.accept()
         logger.debug(f'accept proxy client [{conn}] from {addr}')
         conn.setblocking(False)
-        self.selector.register(conn, selectors.EVENT_READ, self.parse_method_payload)
+        self.selector.register(conn, selectors.EVENT_READ, (self.parse_method_payload,))
 
     def parse_method_payload(self, client: socket.socket):
         """
@@ -218,7 +189,7 @@ class Server(BaseServer):
             # 注销监听
             self.selector.unregister(client)
             # 添加新的监听，处理请求阶段
-            self.selector.register(client, selectors.EVENT_READ, self.parse_request_payload)
+            self.selector.register(client, selectors.EVENT_READ, (self.parse_request_payload,))
             return
         # 需要账号密码认证
         if 0x02 not in methods:
@@ -227,7 +198,7 @@ class Server(BaseServer):
         # 注销旧的监听
         self.selector.unregister(client)
         # 添加新的监听，处理账号密码认证
-        self.selector.register(client, selectors.EVENT_READ, self.parse_auth_payload)
+        self.selector.register(client, selectors.EVENT_READ, (self.parse_auth_payload,))
 
     def get_available_methods(self, client: socket.socket, n: int) -> List[int]:
         """
@@ -263,7 +234,7 @@ class Server(BaseServer):
         # 注销监听
         self.selector.unregister(client)
         # 添加新的监听，处理请求阶段
-        self.selector.register(client, selectors.EVENT_READ, self.parse_request_payload)
+        self.selector.register(client, selectors.EVENT_READ, (self.parse_request_payload,))
 
     def parse_request_payload(self, client: socket.socket):
         """
@@ -285,7 +256,7 @@ class Server(BaseServer):
             return self.close_sock(client)
         # TODO: 检查 CMD 类型，暂时只实现 CONNECT 请求
         if cmd != 0x01:
-            client.send(struct.pack('!BBBBIH', self.SOCKS_VERSION, 0x07, 0x00, dst_addr, 0x00, 0x00))
+            client.send(struct.pack('!BBBBIH', self.SOCKS_VERSION, 0x07, 0x00, 0x01, 0x00, 0x00))
             return self.close_sock(client)
         # 如果没有可用的 agent，则拒绝请求
         if not self.agent_map:
@@ -302,23 +273,20 @@ class Server(BaseServer):
         # TODO：后期增加多端口或多路由方式选择不同的 agent
         agent_client = random.choice(list(self.agent_map.values()))
         self.send(agent_client, data)
-        # 保存代理客户端和 agent 的映射
-        self.save_client_agent_map(client, agent_client)
 
-    def parse_relay_payload(self, client: socket.socket):
+    def parse_relay_payload(self, client: socket.socket, agent: socket.socket):
         """处理 relay 阶段"""
-        req_data = self.recv(client, settings.BUFFER_SIZE)
+        if client.fileno() == -1:
+            return
+        if agent.fileno() == -1:
+            logger.debug('agent was closed')
+            return self.close_client(client)
+        req_data = client.recv(settings.BUFFER_SIZE)
         # 如果没有数据
         if not req_data:
             # 通知 agent 连接断开了
-            self.close_bnd_socket(client)
+            self.close_bnd_socket(agent, client)
             # 断开监听
-            return self.close_client(client)
-        agent = self.get_client_agent_map(client)
-        # 如果找不到对照的 agent 或 agent 断开了，则把代理客户端断开
-        if not agent:
-            logger.debug(
-                f'not found the agent for client: {client}')
             return self.close_client(client)
         data = struct.pack('!B', 0x02)
         data += self.sock2send_data(client)
@@ -335,7 +303,7 @@ class Server(BaseServer):
             port=settings.TUNNEL_BIND_PORT
         )
         logger.info(f'start tunnel server: {settings.TUNNEL_BIND_HOST}:{settings.TUNNEL_BIND_PORT}')
-        self.selector.register(self.tunnel_socket, selectors.EVENT_READ, self.accept_agent_client)
+        self.selector.register(self.tunnel_socket, selectors.EVENT_READ, (self.accept_agent_client,))
 
     def accept_agent_client(self, tunnel_socket: socket.socket):
         """接收 agent 的请求"""
@@ -346,7 +314,7 @@ class Server(BaseServer):
         )
         conn.setblocking(False)
         utils.set_keepalive(conn)
-        self.selector.register(conn, selectors.EVENT_READ, self.start_agent_client)
+        self.selector.register(conn, selectors.EVENT_READ, (self.start_agent_client,))
         
     def start_agent_client(self, agent: socket.socket):
         """开启 agent 连接"""
@@ -358,7 +326,7 @@ class Server(BaseServer):
             return self.close_sock(agent)
         self.save_agent(agent)
         self.selector.unregister(agent)
-        self.selector.register(agent, selectors.EVENT_READ, self.handle_agent_recv)
+        self.selector.register(agent, selectors.EVENT_READ, (self.handle_agent_recv,))
 
     def handle_agent_recv(self, agent: socket.socket):
         """处理 agent 客户端发送的请求"""
@@ -385,10 +353,10 @@ class Server(BaseServer):
     def handle_proxy_response(self, agent: socket.socket):
         """处理 agent 转发的请求阶段"""
         memory_bytes = self.get_memory_bytes(agent)
-        client = self.get_client(memory_bytes)
         rep = struct.unpack('!B', self.recv(agent, 1))[0]
         atyp, bnd_addr, bnd_port = self.parse_socks5_addr_port(agent)
         # client 如果不存在，通知 agent 关闭对应绑定的套接字
+        client = self.get_client(memory_bytes)
         if not client:
             logger.debug(f'client not found')
             return self.close_agent_bnd(agent, memory_bytes)
@@ -401,15 +369,15 @@ class Server(BaseServer):
         # 注销上次 client 的监听
         self.selector.unregister(client)
         # 添加新的监听
-        self.selector.register(client, selectors.EVENT_READ, self.parse_relay_payload)
+        self.selector.register(client, selectors.EVENT_READ, (self.parse_relay_payload, agent))
 
     def handle_agent_relay(self, agent: socket.socket):
         """处理 agent 的 relay 转发"""
         memory_bytes = self.get_memory_bytes(agent)
-        client = self.get_client(memory_bytes)
         length = struct.unpack('!H', self.recv(agent, 2))[0]
         resp_data = self.recv(agent, length)
         # client 如果不存在，通知 agent 关闭对应绑定的套接字
+        client = self.get_client(memory_bytes)
         if not client:
             logger.debug(f'client not found')
             return self.close_agent_bnd(agent, memory_bytes)
@@ -426,7 +394,7 @@ class Server(BaseServer):
 
     def close_agent_bnd(self, agent: socket.socket, memory_bytes: bytes):
         """通知 agent 关闭远端的套接字"""
-        data = struct.pack('!BH', 0x03, len(memory_bytes)) + memory_bytes
+        data = struct.pack('!BB', 0x03, len(memory_bytes)) + memory_bytes
         self.send(agent, data)
 
 

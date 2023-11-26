@@ -10,6 +10,7 @@ from utils.module_loading import load_backend
 class BaseServer(object):
     # 服务类型，填 server 或 agent
     _TYPE = ''
+    backend_cache = {}
 
     def call(self, backend_path: str, method: str, *args, **kwargs):
         """
@@ -20,7 +21,10 @@ class BaseServer(object):
         :param kwargs:
         :return:
         """
-        backend = load_backend(backend_path)
+        backend = self.backend_cache.get(backend_path)
+        if not backend:
+            backend = load_backend(backend_path)
+            self.backend_cache[backend_path] = backend
         func = getattr(backend, method)
         return func(self, *args, **kwargs)
 

@@ -18,7 +18,6 @@ class Agent(BaseServer):
         self.agent_socket = None
         self.retry = 0
         self.cli_remote_map: dict[bytes, socket.socket] = {}
-        self.remote_cli_map: dict[socket.socket, bytes] = {}
 
     @logger.catch
     def run(self):
@@ -27,8 +26,8 @@ class Agent(BaseServer):
             try:
                 events = self.selector.select()
                 for key, _ in events:
-                    callback = key.data
-                    callback(key.fileobj)
+                    callback = key.data[0]
+                    callback(key.fileobj, *key.data[1:])
             except KeyboardInterrupt:
                 self.close()
                 logger.info('Bye Bye!')
@@ -47,33 +46,14 @@ class Agent(BaseServer):
         :return:
         """
         self.cli_remote_map[cli_info] = remote
-        self.remote_cli_map[remote] = cli_info
 
-    def delete_map(self, *, remote: socket.socket = None, cli_info: bytes = None):
+    def delete_map(self, cli_info: bytes = None):
         """
         删除 remote 和 client 的映射
-        :param remote: 目标地址的套接字
         :param cli_info: 代理客户端的 16 进制内存地址
         :return:
         """
-        if remote:
-            cli_info = self.remote_cli_map.pop(remote, None)
-            self.cli_remote_map.pop(cli_info, None)
-            return cli_info
-        elif cli_info:
-            remote = self.cli_remote_map.pop(cli_info, None)
-            self.remote_cli_map.pop(remote, None)
-            return remote
-        else:
-            raise Exception('parameter error')
-
-    def get_cli(self, remote: socket.socket) -> Optional[bytes]:
-        """
-        通过 remote 的套接字获取对应的代理客户端地址
-        :param remote: 目标地址的套接字
-        :return: 代理客户端的 16 进制内存地址
-        """
-        return self.remote_cli_map.get(remote)
+        return self.cli_remote_map.pop(cli_info, None)
 
     def get_remote(self, cli_info: bytes) -> Optional[socket.socket]:
         """
@@ -82,9 +62,8 @@ class Agent(BaseServer):
         :return: 目标地址的套接字
         """
         remote = self.cli_remote_map.get(cli_info)
-        if remote.fileno() == -1:
+        if remote and remote.fileno() == -1:
             self.cli_remote_map.pop(cli_info, None)
-            self.remote_cli_map.pop(remote, None)
             self.selector.unregister(remote)
             remote.close()
             return
@@ -121,7 +100,7 @@ class Agent(BaseServer):
             self.agent_socket.close()
             raise exceptions.AuthenticationFailedException()
         self.agent_socket.setblocking(False)
-        self.selector.register(self.agent_socket, selectors.EVENT_READ, self.handle_server_cmd)
+        self.selector.register(self.agent_socket, selectors.EVENT_READ, (self.handle_server_cmd,))
         # 重置重试的次数
         self.retry = 0
         logger.info('tunnel server connected')
@@ -138,12 +117,12 @@ class Agent(BaseServer):
             data = None
         if not data:
             logger.warning(f'tunnel server disconnected')
-            # 重新创建一个新的连接
-            self.start_agent()
             # 注销之前的监听
             self.selector.unregister(agent_socket)
             # 关闭套接字
-            return agent_socket.close()
+            agent_socket.close()
+            # 重新创建一个新的连接
+            return self.start_agent()
         _type = struct.unpack('!B', data)[0]
         if _type == 0x01:
             return self.create_connect(agent_socket)
@@ -164,45 +143,42 @@ class Agent(BaseServer):
         :return:
         """
         memory_bytes = self.get_memory_bytes(agent_socket)
-        cmd = struct.unpack('!B', agent_socket.recv(1))
+        cmd = struct.unpack('!B', self.recv(agent_socket, 1))
         atyp, dst_addr, dst_port = self.parse_socks5_addr_port(agent_socket)
-        try:
-            remote = self.create_dst_socket(atyp, dst_addr, dst_port)
-        except Exception as e:
-            logger.debug(e)
-            data = struct.pack('!B', 0x01)
-            data += struct.pack('!B', len(memory_bytes)) + memory_bytes
-            data += struct.pack('!BBIH', 0x05, 0x01, 0x00, 0x00)
-            # data += utils.transform_addr_port_to_bytes(dst_addr, dst_port)
-            return self.send(agent_socket, data)
-        data = struct.pack('!B', 0x01)
-        data += struct.pack('!B', len(memory_bytes)) + memory_bytes
-        data += struct.pack('!BBIH', 0x00, 0x01, 0x00, 0x00)
-        # data += struct.pack('!B', 0x00)
-        # data += utils.transform_addr_port_to_bytes(*utils.get_socket_addr_port(remote))
-        self.send(agent_socket, data)
-        self.save_map(remote, memory_bytes)
-        self.selector.register(remote, selectors.EVENT_READ, self.handle_remote_recv)
 
-    def create_dst_socket(self, atyp, dst_addr, dst_port) -> socket.socket:
-        """
-        创建目标服务的套接字连接
-        :param atyp: socks5 的地址类型
-        :param dst_addr: 目标地址
-        :param dst_port: 目标端口
-        :return: 目标地址的套接字
-        """
         if atyp == 0x01 or atyp == 0x03:
             remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         elif atyp == 0x04:
             remote = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
         else:
             raise exceptions.UnknownTypeException()
-        logger.debug(f'create remote connect: {dst_addr}:{dst_port}')
-        # TODO：这里这样连接可能会造成阻塞
-        remote.connect((dst_addr, dst_port))
+
         remote.setblocking(False)
-        return remote
+        self.selector.register(remote, selectors.EVENT_WRITE, (self.create_connect_cb, agent_socket, memory_bytes))
+        try:
+            logger.info(f'create remote: {(dst_addr, dst_port)}')
+            remote.connect((dst_addr, dst_port))
+        except BlockingIOError:
+            pass
+
+    def create_connect_cb(self, remote: socket.socket, agent_socket: socket.socket, memory_bytes: bytes):
+        self.selector.unregister(remote)
+        try:
+            remote.getpeername()
+        # 如果拿不到，说明这个连接未建立，需要关闭
+        except:
+            remote.close()
+            data = struct.pack('!B', 0x01)
+            data += struct.pack('!B', len(memory_bytes)) + memory_bytes
+            data += struct.pack('!BBIH', 0x05, 0x01, 0x00, 0x00)
+            return self.send(agent_socket, data)
+
+        data = struct.pack('!B', 0x01)
+        data += struct.pack('!B', len(memory_bytes)) + memory_bytes
+        data += struct.pack('!BBIH', 0x00, 0x01, 0x00, 0x00)
+        self.send(agent_socket, data)
+        self.save_map(remote, memory_bytes)
+        self.selector.register(remote, selectors.EVENT_READ, (self.handle_remote_recv, memory_bytes))
 
     def remote_relay(self, agent_socket: socket.socket):
         """
@@ -216,10 +192,7 @@ class Agent(BaseServer):
         remote = self.get_remote(memory_bytes)
         if not remote:
             # 告诉服务端 remote 的连接断开了
-            data = struct.pack('!B', 0x04)
-            data += struct.pack('!B', len(memory_bytes)) + memory_bytes
-            self.send(agent_socket, data)
-            return
+            return self.send_close_client(memory_bytes=memory_bytes)
         remote.send(req_data)
 
     def close_connect(self, agent_socket: socket.socket):
@@ -234,26 +207,25 @@ class Agent(BaseServer):
             return
         self.close_sock(remote)
 
-    def handle_remote_recv(self, remote: socket.socket):
+    def handle_remote_recv(self, remote: socket.socket, memory_bytes: bytes):
         """处理远程服务发送过来的消息"""
         resp_data = remote.recv(settings.BUFFER_SIZE)
         if not resp_data:
             # 删除映射
-            memory_bytes = self.delete_map(remote=remote)
+            self.delete_map(cli_info=memory_bytes)
             # 通知服务端连接断开了
-            if memory_bytes:
-                data = struct.pack('!B', 0x04)
-                data += struct.pack('!B', len(memory_bytes)) + memory_bytes
-                self.send(self.agent_socket, data)
+            self.send_close_client(memory_bytes=memory_bytes)
             return self.close_sock(remote)
-        memory_bytes = self.get_cli(remote)
-        if not memory_bytes:
-            logger.debug(f'not found the cli_info for remote[{remote}]')
-            return self.close_sock(remote)
+
         data = struct.pack('!B', 0x02)
         data += struct.pack('!B', len(memory_bytes)) + memory_bytes
         data += struct.pack('!H', len(resp_data))
         data += resp_data
+        self.send(self.agent_socket, data)
+
+    def send_close_client(self, memory_bytes: bytes):
+        data = struct.pack('!B', 0x04)
+        data += struct.pack('!B', len(memory_bytes)) + memory_bytes
         self.send(self.agent_socket, data)
 
 
