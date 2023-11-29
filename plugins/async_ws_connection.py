@@ -14,20 +14,18 @@ from logger import logger
 from plugins.async_connection import SocketConnection
 
 try:
-    # If wsaccel is available, use compiled routines to mask data.
-    # wsaccel only provides around a 10% speed boost compared
-    # to the websocket-client _mask() implementation.
-    # Note that wsaccel is unmaintained.
-    from wsaccel.xormask import XorMaskerSimple
+    from tornado.speedups import websocket_mask
 
-    def _mask(_m, _d) -> bytes:
-        return XorMaskerSimple(_m).process(_d)
+    def _mask(mask_value: bytes, data_value: bytes) -> bytes:
+        return websocket_mask(mask_value, data_value)
 
 except ImportError:
-    # wsaccel is not available, use websocket-client _mask()
+    # tornado is not available, use websocket-client _mask()
     native_byteorder = sys.byteorder
 
-    def _mask(mask_value: array.array, data_value: array.array) -> bytes:
+    def _mask(mask_value: bytes, data_value: bytes) -> bytes:
+        mask_value = array.array('B', mask_value)
+        data_value = array.array('B', data_value)
         datalen = len(data_value)
         int_data_value = int.from_bytes(data_value, native_byteorder)
         int_mask_value = int.from_bytes(mask_value * (datalen // 4) + mask_value[: datalen % 4], native_byteorder)
@@ -182,7 +180,7 @@ class WebSocketConnection(SocketConnection):
         :param payload:
         :return:
         """
-        return _mask(array.array('B', mask_key), array.array('B', payload))
+        return _mask(mask_key, payload)
 
     def create_frame(self, payload: bytes, mask: bool = False, opcode: int = OPCODE_BINARY) -> bytes:
         """

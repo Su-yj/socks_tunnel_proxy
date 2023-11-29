@@ -94,21 +94,23 @@ class Agent(BaseServer):
                 id_bytes = await self.get_id_bytes(self.reader, self.writer)
                 cmd = struct.unpack('!B', await self.recv(self.reader, self.writer, 1))
                 atyp, dst_addr, dst_port = await self.parse_socks5_addr_port(self.reader, self.writer)
-                # await self.create_connect(id_bytes, dst_addr, dst_port)
                 asyncio.ensure_future(self.create_connect(id_bytes, dst_addr, dst_port))
             # socks5 数据交换处理阶段
             elif _type == 0x02:
-                await self.remote_relay()
-                # asyncio.ensure_future(self.remote_relay())
+                id_bytes = await self.get_id_bytes(self.reader, self.writer)
+                length = struct.unpack('!H', await self.recv(self.reader, self.writer, 2))[0]
+                req_data = await self.recv(self.reader, self.writer, length)
+                asyncio.ensure_future(self.remote_relay(id_bytes, req_data))
             # 关闭创建的 socket 连接
             elif _type == 0x03:
-                await self.close_connect()
+                id_bytes = await self.get_id_bytes(self.reader, self.writer)
+                asyncio.ensure_future(self.close_connect(id_bytes))
             # agent 向服务端发送连接断开的处理（理论上不会进入这里）
             elif _type == 0x04:
                 await self.recv(self.reader, self.writer, 1)
             # 服务端向客户端发送 ping 数据
             elif _type == 0x05:
-                await self.handle_ping()
+                asyncio.ensure_future(self.handle_ping())
             # 服务端向客户端回复 pong 数据（不需要处理）
             elif _type == 0x06:
                 pass
@@ -170,11 +172,8 @@ class Agent(BaseServer):
         # 关闭连接
         await self.close_writer(writer)
 
-    async def remote_relay(self):
+    async def remote_relay(self, id_bytes: bytes, req_data: bytes):
         """处理 relay 阶段的数据"""
-        id_bytes = await self.get_id_bytes(self.reader, self.writer)
-        length = struct.unpack('!H', await self.recv(self.reader, self.writer, 2))[0]
-        req_data = await self.recv(self.reader, self.writer, length)
         # 获取当前 id 对应的 remote streams
         reader, writer = await self.get_streams(id_bytes)
         # 如果没有 writer，说明当前连接已断开
@@ -182,12 +181,11 @@ class Agent(BaseServer):
             data = struct.pack('!BB', 0x04, len(id_bytes)) + id_bytes
             return await self.send(self.reader, self.writer, data)
         writer.write(req_data)
-        # await writer.drain()
-        asyncio.ensure_future(writer.drain())
+        await writer.drain()
+        # asyncio.ensure_future(writer.drain())
 
-    async def close_connect(self):
+    async def close_connect(self, id_bytes: bytes):
         """关闭 remote 的连接"""
-        id_bytes = await self.get_id_bytes(self.reader, self.writer)
         reader, writer = await self.get_streams(id_bytes)
         await self.close_writer(writer)
         await self.remove_map(id_bytes)

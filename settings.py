@@ -4,8 +4,8 @@ BUFFER_SIZE = 1024
 # log level (DEBUG | INFO | WARNING | ERROR | CRITICAL)
 LOG_LEVEL = 'DEBUG'
 # backends
-# CONNECTION_BACKEND = 'plugins.async_connection.SocketConnection'
-CONNECTION_BACKEND = 'plugins.async_ws_connection.WebSocketConnection'
+CONNECTION_BACKEND = 'plugins.async_connection.SocketConnection'
+# CONNECTION_BACKEND = 'plugins.async_ws_connection.WebSocketConnection'
 # CONNECTION_BACKEND = 'plugins.connection.SocketConnection'
 AUTHENTICATION_BACKEND = 'plugins.async_authentication.AnonymousAuthentication'
 # AUTHENTICATION_BACKEND = 'plugins.authentication.AnonymousAuthentication'

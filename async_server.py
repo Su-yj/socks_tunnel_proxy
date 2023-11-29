@@ -329,37 +329,53 @@ class Server(BaseServer):
             # logger.debug(f'type: {_type}')
             # 处理 connect 的回调
             if _type == 0x01:
-                await self.after_tunnel_request(reader, writer)
+                id_bytes = await self.get_id_bytes(reader, writer)
+                rep = struct.unpack('!B', await self.recv(reader, writer, 1))[0]
+                atyp, bnd_addr, bnd_port = await self.parse_socks5_addr_port(reader, writer)
+                asyncio.ensure_future(self.after_tunnel_request(reader, writer, id_bytes, rep, atyp, bnd_addr, bnd_port))
             # 处理 relay 的回调
             elif _type == 0x02:
-                await self.after_tunnel_relay(reader, writer)
+                id_bytes = await self.get_id_bytes(reader, writer)
+                date_length = struct.unpack('!H', await self.recv(reader, writer, 2))[0]
+                resp_data = await self.recv(reader, writer, date_length)
+                asyncio.ensure_future(self.after_tunnel_relay(reader, writer, id_bytes, resp_data))
             # 服务端断开绑定连接（理论上不会进来）
             elif _type == 0x03:
                 await self.recv(reader, writer, 1)
             # agent 客户端请求断开连接
             elif _type == 0x04:
-                await self.after_tunnel_close_connect(reader, writer)
+                id_bytes = await self.get_id_bytes(reader, writer)
+                asyncio.ensure_future(self.after_tunnel_close_connect(reader, writer, id_bytes))
             # agent 向服务端发送 ping 数据
             elif _type == 0x05:
-                await self.handle_ping(reader, writer)
+                asyncio.ensure_future(self.handle_ping(reader, writer))
             # agent 向服务端回复的 pong 数据
             elif _type == 0x06:
                 pass
             else:
                 raise exceptions.UnknownCMDException()
 
-    async def after_tunnel_request(self, reader: StreamReader, writer: StreamWriter):
+    async def after_tunnel_request(self,
+                                   reader: StreamReader,
+                                   writer: StreamWriter,
+                                   id_bytes: bytes,
+                                   rep: int,
+                                   atyp: int,
+                                   bnd_addr: str,
+                                   bnd_port: int):
         """
         处理创建连接后的回应
         :param reader: StreamReader
         :param writer: StreamWriter
+        :param id_bytes: 客户端的 ID 标识
+        :param rep: rep
+        :param atyp: atyp
+        :param bnd_addr:
+        :param bnd_port:
         :return:
         """
-        id_bytes = await self.get_id_bytes(reader, writer)
-        cli_reader, cli_writer = await self.get_client(id_bytes)
-        rep = struct.unpack('!B', await self.recv(reader, writer, 1))[0]
-        atyp, bnd_addr, bnd_port = await self.parse_socks5_addr_port(reader, writer)
         # client 如果不存在，通知 agent 关闭对应绑定的套接字
+        cli_reader, cli_writer = await self.get_client(id_bytes)
         if not cli_reader:
             return await self.notice_client_closed(reader, writer, id_bytes)
         # 发送回应给到 socks5 客户端
@@ -372,32 +388,31 @@ class Server(BaseServer):
         if rep != 0x00:
             return await self.close_writer(cli_writer)
 
-    async def after_tunnel_relay(self, reader: StreamReader, writer: StreamWriter):
+    async def after_tunnel_relay(self, reader: StreamReader, writer: StreamWriter, id_bytes: bytes, resp_data: bytes):
         """
         处理 tunnel 的 relay 回应阶段
         :param reader: StreamReader
         :param writer: StreamWriter
+        :param id_bytes:
+        :param resp_data:
         :return:
         """
-        id_bytes = await self.get_id_bytes(reader, writer)
-        cli_reader, cli_writer = await self.get_client(id_bytes)
-        date_length = struct.unpack('!H', await self.recv(reader, writer, 2))[0]
-        resp_data = await self.recv(reader, writer, date_length)
         # 如果没有 cli_reader，就不用再继续处理了
+        cli_reader, cli_writer = await self.get_client(id_bytes)
         if not cli_reader:
             # 告诉 tunnel 断开连接
             return await self.notice_client_closed(reader, writer, id_bytes)
         cli_writer.write(resp_data)
         await cli_writer.drain()
 
-    async def after_tunnel_close_connect(self, reader: StreamReader, writer: StreamWriter):
+    async def after_tunnel_close_connect(self, reader: StreamReader, writer: StreamWriter, id_bytes: bytes):
         """
         处理 tunnel 关闭连接的请求
         :param reader: StreamReader
         :param writer: StreamWriter
+        :param id_bytes:
         :return:
         """
-        id_bytes = await self.get_id_bytes(reader, writer)
         cli_reader, cli_writer = await self.get_client(id_bytes)
         if not cli_reader:
             return
