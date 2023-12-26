@@ -129,11 +129,11 @@ class Server(BaseServer):
         password = (await reader.readexactly(plen)).decode()
         # 密码不正确
         if username != settings.SOCKS5_USERNAME or password != settings.SOCKS5_PASSWORD:
-            writer.write(struct.pack('!BB', self.SOCKS_VERSION, 0x01))
+            writer.write(struct.pack('!BB', 0x01, 0x01))
             await writer.drain()
             return await self.close_writer(writer)
         # 认证通过
-        writer.write(struct.pack('!BB', self.SOCKS_VERSION, 0x00))
+        writer.write(struct.pack('!BB', 0x01, 0x00))
         await writer.drain()
 
     async def handle_socks5_request(self,
