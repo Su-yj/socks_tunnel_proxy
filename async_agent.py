@@ -52,11 +52,15 @@ class Agent(BaseServer):
         self.retry = 0
         logger.info(f'tunnel server connected: ({settings.TUNNEL_SERVER_HOST}, {settings.TUNNEL_SERVER_PORT})')
         try:
-            await asyncio.gather(
+            coros_or_futures = [
                 self.handle_cmd(),
-                # self.ping(),
-                # self.check_pong(),
-            )
+            ]
+            if settings.PING_INTERVAL > 0:
+                coros_or_futures += [
+                    self.ping(),
+                    self.check_pong(),
+                ]
+            await asyncio.gather(*coros_or_futures)
         except KeyboardInterrupt:
             raise
         except Exception as e:
@@ -67,13 +71,13 @@ class Agent(BaseServer):
     async def ping(self):
         """定时发送 ping 数据"""
         data = struct.pack('!B', 0x05)
-        while True:
+        while not self.writer.is_closing():
             await self.send(self.reader, self.writer, data)
             await asyncio.sleep(settings.PING_INTERVAL)
 
     async def check_pong(self):
         """检查服务端的 pong 响应是否正常"""
-        while True:
+        while not self.writer.is_closing():
             await asyncio.sleep(settings.PING_INTERVAL)
             # 如果上次 pong 的时间大于配置设置时间间隔的3倍，则认为超时了，对方已死
             if time.time() - self.ping_time > settings.PING_INTERVAL * 3:

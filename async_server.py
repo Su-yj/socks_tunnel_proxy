@@ -258,11 +258,15 @@ class Server(BaseServer):
         if not result:
             return
         try:
-            await asyncio.gather(
+            coros_or_futures = [
                 self.handle_tunnel_cmd(reader, writer),
-                # self.ping(reader, writer),
-                # self.check_pong(reader, writer),
-            )
+            ]
+            if settings.PING_INTERVAL > 0:
+                coros_or_futures += [
+                    self.ping(reader, writer),
+                    self.check_pong(reader, writer),
+                ]
+            await asyncio.gather(*coros_or_futures)
         except Exception as e:
             logger.exception(f'tunnel handle error: {e}')
             # 移除关系
@@ -299,7 +303,7 @@ class Server(BaseServer):
         :return:
         """
         data = struct.pack('!B', 0x05)
-        while True:
+        while not writer.is_closing():
             await self.send(reader, writer, data)
             await asyncio.sleep(settings.PING_INTERVAL)
 
@@ -310,7 +314,7 @@ class Server(BaseServer):
         :param writer: StreamWriter
         :return:
         """
-        while True:
+        while not writer.is_closing():
             await asyncio.sleep(settings.PING_INTERVAL)
             pong_time = self.tunnel_ping_time.get(id(reader)) or 0
             # 如果上次 pong 的时间大于配置设置时间间隔的3倍，则认为超时了，对方已死
