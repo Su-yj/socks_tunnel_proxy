@@ -10,6 +10,7 @@ import sys
 from asyncio import StreamReader, StreamWriter
 from typing import Union, Callable
 
+import settings
 from logger import logger
 from plugins.async_connection import SocketConnection
 
@@ -107,19 +108,20 @@ class WebSocketConnection(SocketConnection):
         await writer.drain()
 
     async def agent_start(self, server, host: str, port: int, *args, **kwargs) -> tuple[StreamReader, StreamWriter]:
-        reader, writer = await super(WebSocketConnection, self).agent_start(server, host, port, *args, **kwargs)
-        ws_key = self._create_sec_websocket_key()
-        raw_data = f'GET / HTTP/1.1\r\n' \
-                   f'Host: {host}:{port}\r\n' \
-                   f'Connection: Upgrade\r\n' \
-                   f'Upgrade: websocket\r\n' \
-                   f'Sec-WebSocket-Version: 13\r\n' \
-                   f'Sec-WebSocket-Key: {ws_key}\r\n' \
-                   f'\r\n'
-        writer.write(raw_data.encode())
-        await writer.drain()
-
+        writer = None
         try:
+            reader, writer = await asyncio.open_connection(host=host, port=port)
+            ws_key = self._create_sec_websocket_key()
+            raw_data = f'GET / HTTP/1.1\r\n' \
+                       f'Host: {host}:{port}\r\n' \
+                       f'Connection: Upgrade\r\n' \
+                       f'Upgrade: websocket\r\n' \
+                       f'Sec-WebSocket-Version: 13\r\n' \
+                       f'Sec-WebSocket-Key: {ws_key}\r\n' \
+                       f'\r\n'
+            writer.write(raw_data.encode())
+            await writer.drain()
+
             data = await reader.read(1024)
             data = data.decode()
             if not data.endswith('\r\n'):
@@ -128,11 +130,17 @@ class WebSocketConnection(SocketConnection):
                 raise ValueError('upgrade failed')
             if not re.search(rf'Sec-WebSocket-Accept: {re.escape(self.gen_access_key(ws_key))}\r\n', data, re.I):
                 raise ValueError('accept key error')
-        except Exception as e:
-            logger.error(e)
-            writer.close()
-            await writer.wait_closed()
-            raise e
+        except Exception:
+            if writer:
+                writer.close()
+                await writer.wait_closed()
+            if (settings.TUNNEL_SERVER_RETRY > 0 and server.retry < settings.TUNNEL_SERVER_RETRY) or \
+                    settings.TUNNEL_SERVER_RETRY <= 0:
+                await asyncio.sleep(settings.TUNNEL_SERVER_CONNECT_INTERVAL)
+                server.retry += 1
+                logger.warning(f'reconnect to server: {server.retry} times')
+                return await self.agent_start(server, host, port, *args, **kwargs)
+            raise
         return reader, writer
 
     async def agent_recv(self, server, reader: StreamReader, writer: StreamWriter, bufsize: int, exactly: bool = True,
