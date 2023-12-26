@@ -112,13 +112,15 @@ class Server(BaseServer):
             writer.write(struct.pack('!BB', self.SOCKS_VERSION, 0xFF))
             await writer.drain()
             return await self.close_writer(writer)
+        writer.write(struct.pack('!BB', self.SOCKS_VERSION, 0x02))
+        await writer.drain()
         # 身份认证
         try:
             version = await reader.readexactly(1)
         except IncompleteReadError:
             return await self.close_writer(writer)
         # 版本不正确
-        if version != self.SOCKS_VERSION:
+        if version != b'\x01':
             return await self.close_writer(writer)
         # 账号密码认证
         ulen = struct.unpack('!B', await reader.readexactly(1))[0]
