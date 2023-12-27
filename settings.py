@@ -33,9 +33,9 @@ TUNNEL_SERVER_PORT = int(os.getenv('TUNNEL_SERVER_PORT', 8888))
 TUNNEL_SERVER_SSL = os.getenv('TUNNEL_SERVER_SSL', 'False').lower() in ['true', 'yes', '1', 't', 'y']
 
 # retry connect tunnel server interval (unit：second)
-TUNNEL_SERVER_CONNECT_INTERVAL = os.getenv('TUNNEL_SERVER_CONNECT_INTERVAL', 10)
+TUNNEL_SERVER_CONNECT_INTERVAL = int(os.getenv('TUNNEL_SERVER_CONNECT_INTERVAL', 10))
 # Reconnect tunnel server times (if less than or equal to 0 retry until successful)
-TUNNEL_SERVER_RETRY = os.getenv('TUNNEL_SERVER_RETRY', 3)
+TUNNEL_SERVER_RETRY = int(os.getenv('TUNNEL_SERVER_RETRY', 3))
 
 # #################### Plugin Config ####################
 # websocket path
