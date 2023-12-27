@@ -110,6 +110,7 @@ class SocketConnection(BaseConnection):
 
     def agent_start(self, server, host: str, port: int, *args, **kwargs) -> socket.socket:
         sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # TODO: support ssl
         try:
             sock.connect((host, port))
         except ConnectionRefusedError:

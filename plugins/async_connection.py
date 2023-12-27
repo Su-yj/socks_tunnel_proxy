@@ -69,7 +69,7 @@ class SocketConnection(object):
         :return:
         """
         try:
-            return await asyncio.open_connection(host=host, port=port)
+            return await asyncio.open_connection(host=host, port=port, ssl=settings.TUNNEL_SERVER_SSL)
         except ConnectionRefusedError:
             if (settings.TUNNEL_SERVER_RETRY > 0 and server.retry < settings.TUNNEL_SERVER_RETRY) or \
                     settings.TUNNEL_SERVER_RETRY <= 0:

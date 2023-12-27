@@ -110,7 +110,7 @@ class WebSocketConnection(SocketConnection):
     async def agent_start(self, server, host: str, port: int, *args, **kwargs) -> tuple[StreamReader, StreamWriter]:
         writer = None
         try:
-            reader, writer = await asyncio.open_connection(host=host, port=port)
+            reader, writer = await asyncio.open_connection(host=host, port=port, ssl=settings.TUNNEL_SERVER_SSL)
             ws_key = self._create_sec_websocket_key()
             raw_data = f'GET {getattr(settings, "WS_PATH", "/")} HTTP/1.1\r\n' \
                        f'Host: {host}:{port}\r\n' \
