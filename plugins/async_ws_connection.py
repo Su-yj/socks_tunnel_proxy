@@ -112,7 +112,7 @@ class WebSocketConnection(SocketConnection):
         try:
             reader, writer = await asyncio.open_connection(host=host, port=port)
             ws_key = self._create_sec_websocket_key()
-            raw_data = f'GET / HTTP/1.1\r\n' \
+            raw_data = f'GET {getattr(settings, "WS_PATH", "/")} HTTP/1.1\r\n' \
                        f'Host: {host}:{port}\r\n' \
                        f'Connection: Upgrade\r\n' \
                        f'Upgrade: websocket\r\n' \
